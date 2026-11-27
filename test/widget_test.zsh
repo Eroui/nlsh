@@ -20,9 +20,20 @@ expect() {  # expect <label> <pattern>
   local buf='' chunk start=$SECONDS
   while (( SECONDS - start < 8 )); do
     if zpty -r -t sh chunk; then buf+=$chunk; else sleep 0.05; fi
-    if [[ $buf == *$2* ]]; then print "ok   - $1"; return 0; fi
+    if [[ $buf == *"$2"* ]]; then print "ok   - $1"; return 0; fi
   done
   print "FAIL - $1"; print -r -- "  output was: ${(q+)buf[-400,-1]}"; (( fails++ )); return 1
+}
+
+expect_not() {  # expect_not <label> <pattern> <seconds>: pattern must NOT appear
+  local buf='' chunk start=$SECONDS
+  while (( SECONDS - start < $3 )); do
+    if zpty -r -t sh chunk; then buf+=$chunk; else sleep 0.05; fi
+    if [[ $buf == *"$2"* ]]; then
+      print "FAIL - $1"; print -r -- "  output was: ${(q+)buf[-400,-1]}"; (( fails++ )); return 1
+    fi
+  done
+  print "ok   - $1"
 }
 
 expect "shell started" 'READY> '
@@ -42,11 +53,32 @@ expect "Esc cancels" 'cancelled'
 zpty -n -w sh $'\x01\x04echo RESTORED\r'
 expect "original request was restored" $'RESTORED print a marker\r\n'
 
-# 3. Dangerous command is flagged even when the model says "safe".
+# 3. Dangerous command is flagged even when the model says "safe",
+#    and Enter alone does not run it: it needs a "y" too.
 zpty -n -w sh $'? wipe the build folder\r'
 expect "danger flagged" '[DANGER]'
+zpty -n -w sh $'\r'
+expect "Enter on danger asks for y" 'Run this command? [y/N]'
+zpty -n -w sh 'n'
+expect_not "anything but y does not run it" 'WIPED_42' 1.5
+zpty -n -w sh $'\r'
+expect "asks again on the next Enter" 'Run this command? [y/N]'
+zpty -n -w sh 'y'
+expect "y runs it" 'WIPED_42'
+
+# 3b. An extra Enter typed while waiting must not run the suggestion unseen.
+zpty -n -w sh $'? print a marker\r\r'
+expect "suggestion shown despite type-ahead" 'Enter: run'
+expect_not "type-ahead Enter did not run it" 'NLSH_42' 1.5
 zpty -n -w sh $'\e'; sleep 0.8
 zpty -n -w sh $'\x15\r'   # Ctrl+U clears, Enter on empty line
+
+# 3c. Same for a dangerous one: Enter+y typed ahead must not run it.
+zpty -n -w sh $'? wipe the build folder\r\ry'
+expect "danger shown despite type-ahead" '[DANGER]'
+expect_not "type-ahead Enter+y did not run danger" 'WIPED_42' 1.5
+zpty -n -w sh $'\e'; sleep 0.8
+zpty -n -w sh $'\x15\r'
 
 # 4. No command possible: message shown, nothing replaced.
 zpty -n -w sh $'? impossible: make coffee\r'

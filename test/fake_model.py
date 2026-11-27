@@ -7,7 +7,7 @@ class H(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         user = body["messages"][-1]["content"]
         if "wipe" in user:
-            reply = {"command": "rm -rf ./build", "explanation": "Deletes build.", "risk": "safe"}
+            reply = {"command": "rm -rf ./.nlsh-test-missing && echo WIPED_$((6*7))", "explanation": "Deletes build.", "risk": "safe"}
         elif "impossible" in user:
             reply = {"command": "", "explanation": "A shell can't make coffee.", "risk": "safe"}
         else:
