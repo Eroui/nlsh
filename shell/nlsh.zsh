@@ -13,13 +13,21 @@ if [[ -z $NLSH_BIN ]]; then
   [[ -x $NLSH_BIN ]] || NLSH_BIN=nlsh
 fi
 
-typeset -g _nlsh_original=''
+typeset -g _nlsh_original='' _nlsh_risk=''
 typeset -gi _nlsh_active=0
 
 _nlsh_reset() {
   _nlsh_active=0
   _nlsh_original=''
+  _nlsh_risk=''
   region_highlight=("${(@)region_highlight:#*nlsh*}")
+}
+
+# Throw away keys typed while waiting for the model, so an impatient extra
+# Enter can't run a suggestion the user hasn't seen yet.
+_nlsh_drain_typeahead() {
+  local _k
+  while read -t 0 -k 1 -s _k; do :; done
 }
 
 _nlsh_accept_line() {
@@ -51,8 +59,10 @@ _nlsh_accept_line() {
       return
     fi
 
+    _nlsh_drain_typeahead
     _nlsh_original=$BUFFER
     _nlsh_active=1
+    _nlsh_risk=$risk
     BUFFER=$cmd
     CURSOR=$#BUFFER
 
@@ -65,8 +75,23 @@ _nlsh_accept_line() {
     region_highlight=("${(@)region_highlight:#*nlsh*}")
     [[ -n $color ]] && region_highlight+=("0 $#BUFFER $color memo=nlsh")
 
-    zle -M "[$tag] $explain"$'\n''Enter: run   Esc: cancel   (or edit it first)'
+    local keys='Enter: run   Esc: cancel   (or edit it first)'
+    [[ $risk == danger ]] && keys='Enter, then y: run   Esc: cancel   (or edit it first)'
+    zle -M "[$tag] $explain"$'\n'"$keys"
     return
+  fi
+
+  # Dangerous suggestions need an explicit "y" on top of Enter.
+  if (( _nlsh_active )) && [[ $_nlsh_risk == danger ]]; then
+    _nlsh_drain_typeahead   # before the prompt, so keys typed after seeing it count
+    zle -M 'nlsh: DANGER. Run this command? [y/N]'
+    zle -R
+    local key
+    read -k 1 -s key
+    if [[ $key != [yY] ]]; then
+      zle -M 'nlsh: not run. Enter to try again, Esc to get your request back.'
+      return
+    fi
   fi
 
   _nlsh_reset

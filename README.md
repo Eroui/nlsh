@@ -19,9 +19,11 @@ Terminal.app, inside tmux, over SSH. There's no new app to learn.
   and a risk tag (`safe`, `caution`, `DANGER`).
 - Press **Enter** to run it, **Esc** to cancel (your request comes back so
   you can rephrase), or edit the command first.
-- **Nothing runs without your Enter.** Risky commands (`rm -rf`, `sudo`,
-  force-push, `curl | sh`, ...) are flagged by a built-in check even if the
-  model calls them safe. Caution commands show in yellow, dangerous ones in red.
+- **Nothing runs without your Enter.** Keys typed while nlsh is thinking are
+  discarded, so an impatient extra Enter can't run a command you haven't seen.
+- Risky commands (`rm -rf`, `sudo`, force-push, `curl | sh`, ...) are flagged
+  by a built-in check even if the model calls them safe. Caution commands show
+  in yellow; dangerous ones show in red and need **Enter, then `y`** to run.
 - Commands you run go into your normal shell history.
 - Works with **any model**: a free local model through Ollama (the default),
   Claude, OpenAI, or any OpenAI-compatible API such as Groq, OpenRouter,
