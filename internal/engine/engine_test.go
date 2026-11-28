@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 	"unicode"
-	"unicode/utf8"
 
 	"nlsh/internal/provider"
 )
@@ -89,7 +88,8 @@ func TestGatherContextSkipsDotfilesAndCaps(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	for _, name := range []string{".env", ".hidden", "alpha.txt", strings.Repeat("x", 110)} {
+	longName := "b_" + strings.Repeat("x", 108)
+	for _, name := range []string{".env", ".hidden", "alpha.txt", longName} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -117,9 +117,11 @@ func TestGatherContextSkipsDotfilesAndCaps(t *testing.T) {
 		if strings.HasPrefix(e, ".") {
 			t.Errorf("dotfile leaked into Entries: %q", e)
 		}
-		if n := utf8.RuneCountInString(e); n > maxEntryNameLen {
-			t.Errorf("entry length %d > %d: %q", n, maxEntryNameLen, e)
-		}
+	}
+	req := BuildRequest("list files", c)
+	wantShort := strconv.Quote("b_"+strings.Repeat("x", 77)+"…") + " (shortened)"
+	if !strings.Contains(req.Messages[0].Content, wantShort) {
+		t.Errorf("BuildRequest did not mark shortened entry %s:\n%s", wantShort, req.Messages[0].Content)
 	}
 }
 
@@ -148,8 +150,8 @@ func TestBuildRequestSanitizesAndQuotesContext(t *testing.T) {
 		Entries: entries,
 	})
 
-	if !strings.Contains(req.System, "untrusted data") {
-		t.Errorf("system prompt missing untrusted data instruction: %q", req.System)
+	if !strings.Contains(req.System, "untrusted data") || !strings.Contains(req.System, "(shortened)") {
+		t.Errorf("system prompt missing untrusted data or shortened instruction: %q", req.System)
 	}
 
 	u := req.Messages[0].Content
@@ -171,7 +173,7 @@ func TestBuildRequestSanitizesAndQuotesContext(t *testing.T) {
 		}
 	}
 	for _, r := range dirLine {
-		if r < 0x20 || r == 0x7f || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			t.Errorf("dir line contains raw control/format rune %U: %q", r, dirLine)
 		}
 	}
@@ -184,12 +186,19 @@ func TestBuildRequestSanitizesAndQuotesContext(t *testing.T) {
 		strconv.Quote("biditext"),
 		strconv.Quote("tagtext"),
 		strconv.Quote(`quote"and\slash`),
-		strconv.Quote(strings.Repeat("a", 77) + "..."),
-		strconv.Quote(strings.Repeat("d", 76) + ".../"),
+		strconv.Quote(strings.Repeat("a", 79)+"…") + " (shortened)",
+		strconv.Quote(strings.Repeat("d", 78)+"…/") + " (shortened)",
 		"] (+9 more)",
 	} {
 		if !strings.Contains(dirLine, want) {
 			t.Errorf("dir line missing %s:\n%s", want, dirLine)
 		}
+	}
+
+	longCwd := "/" + strings.Repeat("p", 300)
+	longReq := BuildRequest("pwd", Context{OS: "macOS", Shell: "zsh", Cwd: longCwd})
+	wantCwd := "Current directory (untrusted data): " + strconv.Quote("/"+strings.Repeat("p", maxCwdLen-2)+"…") + " (shortened)"
+	if !strings.HasPrefix(longReq.Messages[0].Content, wantCwd+"\n") {
+		t.Errorf("unexpected shortened cwd:\ngot:  %q\nwant prefix: %q", longReq.Messages[0].Content, wantCwd)
 	}
 }
