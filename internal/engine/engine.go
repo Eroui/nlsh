@@ -252,18 +252,85 @@ type rule struct {
 	risk string
 }
 
+var (
+	ifsRE         = regexp.MustCompile(`\$\{?IFS\}?`)
+	aliasBypassRE = regexp.MustCompile(`(^|[;&|]\s*)\\`)
+)
+
+func normalizeForRisk(cmd string) string {
+	s := ifsRE.ReplaceAllString(cmd, " ")
+	return aliasBypassRE.ReplaceAllString(s, "$1")
+}
+
 var rules = []rule{
-	{regexp.MustCompile(`(^|[;&|]\s*|\s)sudo\s`), RiskDanger},
-	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rRf]|--recursive|--force)`), RiskDanger},
-	{regexp.MustCompile(`\b(mkfs|fdisk|diskutil\s+(erase|partition|zero))`), RiskDanger},
+	// Privilege escalation
+	{regexp.MustCompile(`(^|[;&|]\s*|\s)(/\S*/)?(sudo|doas|pkexec)\b`), RiskDanger},
+	{regexp.MustCompile(`(^|[;&|]\s*|\b(env|command)\s+)(/\S*/)?su(\s|$)`), RiskDanger},
+
+	// Remote code execution and reverse shells
+	{regexp.MustCompile(`(?s)\b(curl|wget)\b[^;&]*\|\s*(sudo\s+|env\s+)?(/\S*/)?((ba|z|da|k|c|tc|fi)?sh|python3?|perl|ruby|node|php|lua|osascript)\b`), RiskDanger},
+	{regexp.MustCompile(`(?s)(\b(ba|z|da|k)?sh|\bsource|(?:^|[;&|]\s*)\.)\s+<\(\s*(curl|wget)\b`), RiskDanger},
+	{regexp.MustCompile(`(?s)\b(eval|(/\S*/)?(ba|z|da|k)?sh\s+-[a-zA-Z]*c)\b.*(\b(curl|wget)\b|\bbase64\b.*(-[dD]|--decode)|\bxxd\b.*-r)`), RiskDanger},
+	{regexp.MustCompile(`(?s)\b(curl|wget)\b.*(&&|;|\n)\s*(chmod\s+\+x|(/\S*/)?(ba|z|da|k)?sh\s|\./)`), RiskDanger},
+	{regexp.MustCompile(`(?s)\b(base64\b.*(-[dD]|--decode)|xxd\b.*-r|openssl\s+(enc|base64)\b.*-d|uudecode)\b[^;&]*\|\s*(sudo\s+|env\s+)?(/\S*/)?((ba|z|da|k|c|tc|fi)?sh|python3?|perl|ruby|node|php)\b`), RiskDanger},
+	{regexp.MustCompile(`/dev/(tcp|udp)/`), RiskDanger},
+	{regexp.MustCompile(`\b(nc|ncat|netcat|socat)\b.*(\s-[a-zA-Z]*[ec]\s|--(sh-)?exec\b|EXEC:|SYSTEM:)`), RiskDanger},
+
+	// Network data uploads and exfiltration
+	{regexp.MustCompile(`(?s)\bcurl\b.*(\s(-[a-zA-Z]*[dFT]([^a-zA-Z]|$)|--(data(-[a-z]+)?|form(-string)?|upload-file|json)\b)|\s(-[a-zA-Z]*X|--request)\s*=?\s*(POST|PUT|PATCH|DELETE)\b)`), RiskDanger},
+	{regexp.MustCompile(`(?s)\bwget\b.*(--post-(data|file)|--body-(data|file)|--method\s*=?\s*(POST|PUT|PATCH|DELETE)\b)`), RiskDanger},
+	{regexp.MustCompile(`\b(scp|rsync)\b.*\s+\S+\s+(\S+:|rsync://)`), RiskDanger},
+	{regexp.MustCompile(`(?s)(\|\s*(/\S*/)?(nc|ncat|netcat|socat)\b|\b(nc|ncat|netcat|socat)\b.*<\s*\S+)`), RiskDanger},
+	{regexp.MustCompile(`\b(rclone\s+(copy|sync|move)|aws\s+s3\s+(cp|sync|mv)|gsutil\s+(cp|rsync|mv)|gh\s+gist\s+create)\b`), RiskDanger},
+	{regexp.MustCompile(`\bhttps?\s+(POST|PUT|PATCH)\b`), RiskDanger},
+
+	// Access to credential and secret files
+	{regexp.MustCompile(`(^|[\s/"'=:])(~|\$HOME|\$\{HOME\}|/[^\s]*|\.)?/?(\.ssh|\.gnupg|\.aws/credentials|\.aws/config|\.kube/config|\.docker/config\.json|\.config/gh/hosts\.yml|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.git-credentials)(/|\b)`), RiskDanger},
+	{regexp.MustCompile(`(^|[\s/"'=:])([^\s/"'=:]*/)?id_(rsa|ed25519|ecdsa|dsa)($|[^.])`), RiskDanger},
+	{regexp.MustCompile(`(^|[\s/"'=:])([^\s/"'=:]*/)?\.env(\.[a-zA-Z0-9_-]+)?($|[\s/"';&|])`), RiskDanger},
+	{regexp.MustCompile(`/etc/(shadow|gshadow|sudoers|master\.passwd)\b`), RiskDanger},
+	{regexp.MustCompile(`\bsecurity\s+(find-(generic|internet)-password|dump-keychain)\b`), RiskDanger},
+	{regexp.MustCompile(`Library/Keychains\b`), RiskDanger},
+
+	// Deletion and destructive disk, data, or git commands
+	{regexp.MustCompile(`\brm\b.*(\s-[a-zA-Z]*[rRf]|\s--(recursive|force|no-preserve-root)\b)`), RiskDanger},
+	{regexp.MustCompile(`\bfind\b.*\s(-delete\b|-exec(dir)?\s+.*\b(rm|unlink|shred)\b)`), RiskDanger},
+	{regexp.MustCompile(`\|\s*xargs\b.*\b(rm|unlink|shred|srm|rmdir)\b`), RiskDanger},
+	{regexp.MustCompile(`\b(mkfs\w*|fdisk|sfdisk|sgdisk|parted|wipefs|blkdiscard|shred|srm|newfs\w*|diskutil\s+(erase|partition|zero))`), RiskDanger},
+	{regexp.MustCompile(`\b(zpool|zfs)\s+destroy\b`), RiskDanger},
 	{regexp.MustCompile(`\bdd\s+.*\bof=`), RiskDanger},
 	{regexp.MustCompile(`>\s*/dev/(disk|sd|nvme)`), RiskDanger},
-	{regexp.MustCompile(`\bgit\s+(push\s+.*(--force|-f\b)|reset\s+--hard|clean\s+-[a-zA-Z]*f)`), RiskDanger},
-	{regexp.MustCompile(`\b(curl|wget)\b.*\|\s*(sudo\s+)?(ba|z)?sh\b`), RiskDanger},
-	{regexp.MustCompile(`\b(shutdown|reboot|halt)\b`), RiskDanger},
-	{regexp.MustCompile(`\bchmod\s+-R|\bchown\s+-R`), RiskDanger},
-	{regexp.MustCompile(`\bkill(all)?\s`), RiskCaution},
-	{regexp.MustCompile(`\b(rm|mv|cp|chmod|chown|ln|truncate)\s`), RiskCaution},
+	{regexp.MustCompile(`>{1,2}\s*/(etc|System|Library|usr|bin|sbin|boot|var/root)/`), RiskDanger},
+	{regexp.MustCompile(`>{1,2}\s*[^\s;&|]*(\.zshrc|\.bashrc|\.zprofile|\.bash_profile|\.profile)\b`), RiskDanger},
+	{regexp.MustCompile(`\brsync\b.*--delete\b`), RiskDanger},
+	{regexp.MustCompile(`\bgit\s+(-[cC]\s+\S+\s+)*(push\s+.*(--force|-f\b|\s\+\S+)|reset\s+--hard|clean\s+.*(-[a-zA-Z]*f|--force)|filter-(branch|repo))`), RiskDanger},
+	{regexp.MustCompile(`(?i)\b(drop\s+(table|database|schema)|truncate\s+table)\b`), RiskDanger},
+	{regexp.MustCompile(`\bdocker\s+(system\s+prune|volume\s+(rm|prune))`), RiskDanger},
+	{regexp.MustCompile(`\bkubectl\s+delete\b`), RiskDanger},
+
+	// System, service, firewall, permission, and persistence commands
+	{regexp.MustCompile(`\b(shutdown|reboot|halt|poweroff|telinit)\b|\binit\s+[06]\b`), RiskDanger},
+	{regexp.MustCompile(`\b(chmod|chown)\b.*(\s-[a-zA-Z]*R|\s--recursive\b)`), RiskDanger},
+	{regexp.MustCompile(`\bchmod\b.*(\b0?[2467][0-7]{3}\b|\b777\b|[ugo]*\+[rwxX]*s|[ao]\+[rwxX]*w)`), RiskDanger},
+	{regexp.MustCompile(`\b(kill|killall|pkill)\b.*\s(-9|-KILL|-SIGKILL)\b`), RiskDanger},
+	{regexp.MustCompile(`\b(launchctl\s+(load|unload|bootstrap|bootout|remove|kill)|systemctl\s+(stop|disable|mask|enable|restart)|crontab\s+(-[er]\b|[^-\s]))|\|\s*crontab\b`), RiskDanger},
+	{regexp.MustCompile(`\b(defaults\s+(write|delete)|csrutil|spctl|nvram|dscl|pfctl|iptables|ip6tables|ufw|firewall-cmd|nft|sysctl\s+-w|mount|umount|modprobe|insmod|rmmod|useradd|userdel|usermod|passwd|visudo)\b`), RiskDanger},
+
+	// Obfuscation and indirect execution
+	{regexp.MustCompile(`(^|[;&|]\s*|\s)eval\s`), RiskCaution},
+	{regexp.MustCompile(`(^|[;&|]\s*)exec\s`), RiskCaution},
+	{regexp.MustCompile(`(^|[;&|]\s*)(source|\.)\s+\S`), RiskCaution},
+	{regexp.MustCompile(`\b((ba|z|da|k|c|tc|fi)?sh\s+-[a-zA-Z]*c|(python3?|perl|ruby|node|php|lua|osascript)\s+-[a-zA-Z]*[ec])\b`), RiskCaution},
+	{regexp.MustCompile(`\bxargs\b.*\b((ba|z|da|k)?sh|eval|python3?|perl|ruby|node)\b`), RiskCaution},
+	{regexp.MustCompile(`\b(base64\b.*(-[dD]|--decode)|xxd\b.*-r|openssl\s+(enc|base64)\b.*-d|uudecode)\b`), RiskCaution},
+	{regexp.MustCompile(`\$'[^']*(\\[xXuU][0-9a-fA-F]+|\\[0-7]{2,3})`), RiskCaution},
+	{regexp.MustCompile(`\b(printf|echo\s+-[a-zA-Z]*e)\b.*(\\[xX][0-9a-fA-F]{2}|\\0[0-7]{2,3})`), RiskCaution},
+	{regexp.MustCompile(`\$\{?IFS\}?`), RiskCaution},
+	{regexp.MustCompile(`\$\([^(]|` + "`"), RiskCaution},
+
+	// General state-modifying commands
+	{regexp.MustCompile(`\b(kill|killall|pkill)\s`), RiskCaution},
+	{regexp.MustCompile(`\b(rm|mv|cp|rsync|chmod|chown|ln|truncate)\s`), RiskCaution},
 	{regexp.MustCompile(`(^|[^>2&])>\s*[^&\s]`), RiskCaution}, // overwrite redirect
 	{regexp.MustCompile(`\b(brew|npm|pip3?|cargo|go)\s+(install|uninstall|remove|upgrade)`), RiskCaution},
 	{regexp.MustCompile(`\bgit\s+(push|commit|checkout|rebase|merge|stash\s+drop)`), RiskCaution},
@@ -272,8 +339,9 @@ var rules = []rule{
 // LocalRisk is a model-independent safety net: it never lowers risk.
 func LocalRisk(cmd string) string {
 	r := RiskSafe
+	norm := normalizeForRisk(cmd)
 	for _, ru := range rules {
-		if ru.re.MatchString(cmd) {
+		if ru.re.MatchString(cmd) || (norm != cmd && ru.re.MatchString(norm)) {
 			r = maxRisk(r, ru.risk)
 		}
 	}
