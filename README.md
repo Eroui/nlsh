@@ -95,7 +95,7 @@ Settings live in `~/.config/nlsh/config.json`. Every field is optional.
 | --- | --- |
 | `provider` | Which backend to use (default `ollama`). |
 | `model` | Override the provider's default model. |
-| `send_dir_listing` | Send the names of up to 60 entries in the current folder so the model can refer to your files (default `true`). |
+| `send_dir_listing` | Send the names of up to 60 visible entries in the current folder so the model can refer to your files; hidden (dot) entries are never sent and long names are shortened (default `true`). |
 | `providers` | Override a built-in provider, or add your own (below). |
 
 **Add any OpenAI-compatible endpoint** (LM Studio, a self-hosted server, etc.):
@@ -151,7 +151,8 @@ nlsh suggest --provider groq --model llama-3.1-8b-instant -- show disk usage
 ## Privacy
 
 Each request sends only: your request text, the current folder path, the
-names (not contents) of up to 60 entries in it, your OS and your shell.
+names (not contents) of up to 60 visible entries in it (hidden dot entries
+are never sent, and long names are shortened), your OS and your shell.
 With Ollama, nothing leaves your machine. Set `"send_dir_listing": false`
 to stop sending file names.
 
